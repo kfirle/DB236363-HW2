@@ -9,7 +9,7 @@ from psycopg2 import sql
 
 def queryFromResultSet(result : Connector.ResultSet) -> Query:
     values = list(result.__getitem__(0).values())
-    answer = Query(*values)
+    answer = Query(*values[0:3])
     return answer
 
 def diskFromResultSet(result : Connector.ResultSet) -> Disk:
@@ -19,22 +19,24 @@ def diskFromResultSet(result : Connector.ResultSet) -> Disk:
 
 def ramFromResultSet(result : Connector.ResultSet) -> RAM:
     values = list(result.__getitem__(0).values())
-    answer = RAM(*values)
+    answer = RAM(*values[0:3])
     return answer
 
 def createTables():
     conn = None
     try:
         conn = Connector.DBConnector()
-        conn.execute("CREATE TABLE Query(id INTEGER NOT NULL CHECK (id > 0), purpose TEXT NOT NULL,"
-                     " size INTEGER NOT NULL CHECK (size >= 0), PRIMARY KEY (id))")
-        conn.commit()
         conn.execute("CREATE TABLE Disk(id INTEGER NOT NULL CHECK (id > 0), company TEXT NOT NULL,"
                      " speed INTEGER NOT NULL CHECK (speed > 0), space INTEGER NOT NULL CHECK (space >= 0),"
                      " cost INTEGER NOT NULL CHECK (cost > 0), PRIMARY KEY (id))")
         conn.commit()
+        conn.execute("CREATE TABLE Query(id INTEGER NOT NULL CHECK (id > 0), purpose TEXT NOT NULL,"
+                     " size INTEGER NOT NULL CHECK (size >= 0), disk_id INTEGER CHECK (disk_id > 0),"
+                     " FOREIGN KEY (disk_id) REFERENCES DISK(id) ON DELETE CASCADE, PRIMARY KEY (id))")
+        conn.commit()
         conn.execute("CREATE TABLE RAM(id INTEGER NOT NULL CHECK (id > 0), size INTEGER NOT NULL CHECK (size > 0),"
-                     " company TEXT NOT NULL, PRIMARY KEY (id))")
+                     " company TEXT NOT NULL, disk_id INTEGER CHECK (disk_id > 0),"
+                     " FOREIGN KEY (disk_id) REFERENCES DISK(id) ON DELETE CASCADE, PRIMARY KEY (id))")
         conn.commit()
     except DatabaseException.ConnectionInvalid as e:
         print(e)
