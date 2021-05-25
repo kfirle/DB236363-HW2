@@ -563,23 +563,120 @@ def diskTotalRAM(diskID: int) -> int:
 
 
 def getCostForPurpose(purpose: str) -> int:
-    return 0
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL("SELECT SUM(cost * size) AS sum "
+                        "FROM ( RunningQueries INNER JOIN "
+                        "(SELECT id AS queries_id, size "
+                        "FROM Query "
+                        "WHERE purpose = '{q_purpose}') AS Q ON queries_id = query_id ) INNER JOIN Disk "
+                        "ON id = disk_id".format(q_purpose=purpose))
+        rows_effected, result = conn.execute(query, printSchema=True)
+        conn.commit()
+        cost_sum = list(result.__getitem__(0).values())[0]
+        if cost_sum is None:
+            return 0
+        return cost_sum
+    except Exception as e:
+        print(e)
+        return -1
+    finally:
+        conn.close()
 
 
 def getQueriesCanBeAddedToDisk(diskID: int) -> List[int]:
-    return []
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL("SELECT Q.id "
+                        "FROM Disk AS D, Query AS Q "
+                        "WHERE D.id = {disk_id} AND ( D.space - Q.size >= 0 ) "
+                        "ORDER BY Q.id DESC "
+                        "LIMIT 5".format(disk_id=diskID))
+        rows_effected, result = conn.execute(query, printSchema=True)
+        conn.commit()
+        list(result.__getitem__(0).values())
+        queries_id = []
+        for i in range(rows_effected):
+            queries_id += result.__getitem__(i).values()
+        return queries_id
+    finally:
+        conn.close()
 
 
 def getQueriesCanBeAddedToDiskAndRAM(diskID: int) -> List[int]:
-    return []
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL("SELECT DISTINCT Q.id "
+                        "FROM Disk AS D, Query AS Q, RAM AS R "
+                        "WHERE D.id = {disk_id} AND ( D.space - Q.size >= 0 ) AND "
+                        "( (SELECT SUM(size) AS sum FROM RAM INNER JOIN (SELECT ram_id FROM RamsOnDisk WHERE disk_id = {disk_id}) AS Q ON id = ram_id) - Q.size >=0 ) "
+                        "ORDER BY Q.id ASC "
+                        "LIMIT 5".format(disk_id=diskID))
+        rows_effected, result = conn.execute(query, printSchema=True)
+        conn.commit()
+        queries_id = []
+        for i in range(rows_effected):
+            queries_id += result.__getitem__(i).values()
+        return queries_id
+    finally:
+        conn.close()
 
 
 def isCompanyExclusive(diskID: int) -> bool:
-    return True
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL("SELECT COUNT(company)"
+                        "FROM ("
+                        "SELECT company "
+                        "FROM Disk "
+                        "WHERE id = {disk_id} "
+                        "UNION "
+                        "(SELECT company "
+                        "FROM RAM "
+                        "WHERE {disk_id} IN "
+                        "(SELECT ram_id "
+                        "FROM RamsOnDisk "
+                        "WHERE disk_id = {disk_id}))) AS C".format(disk_id=diskID))
+        rows_effected, result = conn.execute(query, printSchema=True)
+        conn.commit()
+        companies_num = list(result.__getitem__(0).values())[0]
+        if companies_num == 0:
+            return False
+        if companies_num == 1:
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
 
 
 def getConflictingDisks() -> List[int]:
-    return []
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL("SELECT DISTINCT disk_id "
+                        "FROM RunningQueries "
+                        "WHERE query_id IN "
+                        "(SELECT DISTINCT query_id "
+                        "FROM RunningQueries "
+                        "GROUP BY query_id "
+                        "HAVING COUNT(disk_id) > 1) "
+                        "ORDER BY disk_id ASC")
+        rows_effected, result = conn.execute(query, printSchema=True)
+        conn.commit()
+        queries_id = []
+        for i in range(rows_effected):
+            queries_id += result.__getitem__(i).values()
+        return queries_id
+    finally:
+        conn.close()
 
 
 def mostAvailableDisks() -> List[int]:
