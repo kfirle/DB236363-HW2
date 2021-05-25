@@ -680,7 +680,31 @@ def getConflictingDisks() -> List[int]:
 
 
 def mostAvailableDisks() -> List[int]:
-    return []
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL("SELECT R.id "
+                        "FROM ("
+                        "SELECT COALESCE(COUNT(DQ.query_id),0) AS count, COALESCE(DQ.speed, 0) AS speed, DQ.id AS id "
+                        "FROM ("
+                        "(SELECT id "
+                        "FROM Disk) AS B "
+                        "LEFT OUTER JOIN "
+                        "(SELECT D.id AS disk_id, Q.id AS query_id, D.speed AS speed "
+                        "FROM Disk AS D, Query AS Q "
+                        "WHERE D.space - Q.size >= 0 ) AS A ON A.disk_id = B.id"
+                        ") AS DQ "
+                        "GROUP BY DQ.id ,DQ.disk_id, DQ.speed "
+                        "ORDER BY count DESC, DQ.speed DESC, DQ.disk_id ASC "
+                        ") AS R")
+        rows_effected, result = conn.execute(query, printSchema=True)
+        conn.commit()
+        queries_id = []
+        for i in range(rows_effected):
+            queries_id += result.__getitem__(i).values()
+        return queries_id
+    finally:
+        conn.close()
 
 
 def getCloseQueries(queryID: int) -> List[int]:
