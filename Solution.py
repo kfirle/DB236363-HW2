@@ -61,6 +61,15 @@ def createTables():
                      "FOREIGN KEY (ram_id) REFERENCES RAM(id) ON DELETE CASCADE,"
                      "PRIMARY KEY (disk_id, ram_id)"
                      ");"
+                     "CREATE MATERIALIZED VIEW DISK_QUERY_RAM AS "
+                     "SELECT D.id AS disk_id, D.company AS disk_company, D.speed AS speed, D.space AS space, D.cost AS cost, "
+                     "Q.id AS query_id, Q.purpose AS purpose, Q.size AS query_size, "
+                     "R.id AS ram_id,  R.id AS ram_size, R.id AS ram_company "
+                     "FROM Disk AS D, Query AS Q, RAM AS R;"
+                     "CREATE VIEW DISK_QUERY AS "
+                     "SELECT D.id AS disk_id, D.company AS disk_company, D.speed AS speed, D.space AS space, D.cost AS cost, "
+                     "Q.id AS query_id, Q.purpose AS purpose, Q.size AS query_size "
+                     "FROM Disk AS D, Query AS Q ;"
                      "COMMIT;")
     except DatabaseException.ConnectionInvalid as e:
         print(e)
@@ -590,7 +599,7 @@ def getQueriesCanBeAddedToDisk(diskID: int) -> List[int]:
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT Q.id "
-                        "FROM Disk AS D, Query AS Q "
+                        "FROM (SELECT * FROM DISK_QUERY) "
                         "WHERE D.id = {disk_id} AND ( D.space - Q.size >= 0 ) "
                         "ORDER BY Q.id DESC "
                         "LIMIT 5".format(disk_id=diskID))
@@ -610,11 +619,17 @@ def getQueriesCanBeAddedToDiskAndRAM(diskID: int) -> List[int]:
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT DISTINCT Q.id "
-                        "FROM Disk AS D, Query AS Q, RAM AS R "
+                        "FROM Disk AS D, Query AS Q "
                         "WHERE D.id = {disk_id} AND ( D.space - Q.size >= 0 ) AND "
                         "( (SELECT SUM(size) AS sum FROM RAM INNER JOIN (SELECT ram_id FROM RamsOnDisk WHERE disk_id = {disk_id}) AS Q ON id = ram_id) - Q.size >=0 ) "
                         "ORDER BY Q.id ASC "
                         "LIMIT 5".format(disk_id=diskID))
+        # query = sql.SQL("SELECT DISTINCT A.query_id "
+        #                 "FROM (SELECT * FROM DISK_QUERY_RAM) AS A "
+        #                 "WHERE A.disk_id = {disk_id} AND ( A.space - A.query_size >= 0 ) AND "
+        #                 "( (SELECT SUM(size) AS sum FROM RAM INNER JOIN (SELECT ram_id FROM RamsOnDisk WHERE disk_id = {disk_id}) AS Q ON id = ram_id) - A.query_size >=0 ) "
+        #                 "ORDER BY A.query_id ASC "
+        #                 "LIMIT 5".format(disk_id=diskID))
         rows_effected, result = conn.execute(query, printSchema=True)
         conn.commit()
         queries_id = []
@@ -691,10 +706,10 @@ def mostAvailableDisks() -> List[int]:
                         "FROM Disk) AS B "
                         "LEFT OUTER JOIN "
                         "(SELECT D.id AS disk_id, Q.id AS query_id, D.speed AS speed "
-                        "FROM Disk AS D, Query AS Q "
+                        "FROM (SELECT * FROM DISK_QUERY) "
                         "WHERE D.space - Q.size >= 0 ) AS A ON A.disk_id = B.id"
                         ") AS DQ "
-                        "GROUP BY DQ.id ,DQ.disk_id, DQ.speed "
+                        "GROUP BY DQ.id , DQ.disk_id, DQ.speed "
                         "ORDER BY count DESC, DQ.speed DESC, DQ.disk_id ASC "
                         ") AS R")
         rows_effected, result = conn.execute(query, printSchema=True)
@@ -708,4 +723,38 @@ def mostAvailableDisks() -> List[int]:
 
 
 def getCloseQueries(queryID: int) -> List[int]:
-    return []
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL(
+            "SELECT QUERIES_RUNNING_ON_QUERY_DISKS.query_id AS query_id "
+            "FROM "
+            "( "
+            "SELECT * "
+            "FROM RunningQueries "
+            "WHERE disk_id NOT IN "
+            "( "
+            "SELECT disk_id "
+            "FROM RunningQueries "
+            "WHERE disk_id NOT IN "
+            "( "
+            "SELECT disk_id AS disks "
+            "FROM RunningQueries "
+            "WHERE query_id = {query_id}"
+            ") AND EXISTS (SELECT disk_id AS disks FROM RunningQueries WHERE query_id = {query_id})"
+            ") "
+            ") AS QUERIES_RUNNING_ON_QUERY_DISKS "
+            "WHERE query_id != {query_id} "
+            "GROUP BY query_id "
+            "HAVING COUNT(QUERIES_RUNNING_ON_QUERY_DISKS.disk_id) * 2 >= ( SELECT (COUNT(disk_id)) FROM RunningQueries WHERE query_id = {query_id}) "
+            "ORDER BY query_id ASC "
+            "LIMIT 10"
+            .format(query_id=queryID))
+        rows_effected, result = conn.execute(query, printSchema=True)
+        conn.commit()
+        queries_id = []
+        for i in range(rows_effected):
+            queries_id += result.__getitem__(i).values()
+        return queries_id
+    finally:
+        conn.close()
