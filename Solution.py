@@ -9,7 +9,7 @@ from psycopg2 import sql
 
 def queryFromResultSet(result : Connector.ResultSet) -> Query:
     values = list(result.__getitem__(0).values())
-    answer = Query(*values[0:3])
+    answer = Query(*values)
     return answer
 
 def diskFromResultSet(result : Connector.ResultSet) -> Disk:
@@ -19,7 +19,7 @@ def diskFromResultSet(result : Connector.ResultSet) -> Disk:
 
 def ramFromResultSet(result : Connector.ResultSet) -> RAM:
     values = list(result.__getitem__(0).values())
-    answer = RAM(*values[0:3])
+    answer = RAM(*values)
     return answer
 
 def createTables():
@@ -43,8 +43,8 @@ def createTables():
                      ");"
                      "CREATE TABLE RAM("
                      "id INTEGER NOT NULL CHECK (id > 0),"
-                     "size INTEGER NOT NULL CHECK (size > 0),"
                      "company TEXT NOT NULL,"
+                     "size INTEGER NOT NULL CHECK (size > 0),"
                      "PRIMARY KEY (id)"
                      ");"
                      "CREATE TABLE RunningQueries("
@@ -52,24 +52,24 @@ def createTables():
                      "disk_id INTEGER NOT NULL CHECK (disk_id > 0),"
                      "FOREIGN KEY (disk_id) REFERENCES Disk(id) ON DELETE CASCADE,"
                      "FOREIGN KEY (query_id) REFERENCES Query(id) ON DELETE CASCADE,"
-                     "PRIMARY KEY (disk_id, query_id)"
+                     "UNIQUE (disk_id, query_id)"
                      ");"
                      "CREATE TABLE RamsOnDisk("
                      "ram_id INTEGER NOT NULL CHECK (ram_id > 0),"
                      "disk_id INTEGER NOT NULL CHECK (disk_id > 0),"
                      "FOREIGN KEY (disk_id) REFERENCES Disk(id) ON DELETE CASCADE,"
                      "FOREIGN KEY (ram_id) REFERENCES RAM(id) ON DELETE CASCADE,"
-                     "PRIMARY KEY (disk_id, ram_id)"
+                     "UNIQUE (disk_id, ram_id)"
                      ");"
-                     "CREATE MATERIALIZED VIEW DISK_QUERY_RAM AS "
-                     "SELECT D.id AS disk_id, D.company AS disk_company, D.speed AS speed, D.space AS space, D.cost AS cost, "
-                     "Q.id AS query_id, Q.purpose AS purpose, Q.size AS query_size, "
-                     "R.id AS ram_id,  R.id AS ram_size, R.id AS ram_company "
-                     "FROM Disk AS D, Query AS Q, RAM AS R;"
-                     "CREATE VIEW DISK_QUERY AS "
-                     "SELECT D.id AS disk_id, D.company AS disk_company, D.speed AS speed, D.space AS space, D.cost AS cost, "
-                     "Q.id AS query_id, Q.purpose AS purpose, Q.size AS query_size "
-                     "FROM Disk AS D, Query AS Q ;"
+                     # "CREATE MATERIALIZED VIEW DISK_QUERY_RAM AS "
+                     # "SELECT D.id AS disk_id, D.company AS disk_company, D.speed AS speed, D.space AS space, D.cost AS cost, "
+                     # "Q.id AS query_id, Q.purpose AS purpose, Q.size AS query_size, "
+                     # "R.id AS ram_id,  R.id AS ram_size, R.id AS ram_company "
+                     # "FROM Disk AS D, Query AS Q, RAM AS R;"
+                     # "CREATE MATERIALIZED VIEW DISK_QUERY AS "
+                     # "SELECT D.id AS disk_id, D.company AS disk_company, D.speed AS speed, D.space AS space, D.cost AS cost, "
+                     # "Q.id AS query_id, Q.purpose AS purpose, Q.size AS query_size "
+                     # "FROM Disk AS D, Query AS Q ;"
                      "COMMIT;")
     except DatabaseException.ConnectionInvalid as e:
         print(e)
@@ -172,7 +172,7 @@ def addQuery(query: Query) -> ReturnValue:
         query = sql.SQL("INSERT INTO Query(id, purpose, size) VALUES({id}, {purpose}, {size})")\
             .format(id=sql.Literal(query.getQueryID()), purpose=sql.Literal(query.getPurpose()),
                     size=sql.Literal(query.getSize()))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         conn.commit()
         return ReturnValue.OK
     except DatabaseException.ConnectionInvalid as e:
@@ -203,7 +203,7 @@ def getQueryProfile(queryID: int) -> Query:
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT * FROM Query WHERE id={queryID}".format(queryID=queryID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         answer = queryFromResultSet(result)
         conn.commit()
         return answer
@@ -219,11 +219,15 @@ def deleteQuery(query: Query) -> ReturnValue:
     conn = None
     try:
         conn = Connector.DBConnector()
-        query = sql.SQL("DELETE FROM Query WHERE id={queryID}".format(queryID=query.getQueryID()))
-        rows_effected, _ = conn.execute(query, printSchema=True)
-        conn.commit()
-        if rows_effected == 0:
-            return ReturnValue.NOT_EXISTS
+        query = sql.SQL("BEGIN;"
+                        "UPDATE Disk "
+                        "SET space = space + {query_size} "
+                        "WHERE id IN (SELECT disk_id FROM RunningQueries WHERE query_id = {query_id});"
+                        "DELETE FROM Query WHERE id={query_id};"
+                        "COMMIT;".format(query_id=query.getQueryID(), query_size=query.getSize()))
+        rows_effected, _ = conn.execute(query, printSchema=False)
+        # if rows_effected == 0:
+        #     return ReturnValue.NOT_EXISTS
         return ReturnValue.OK
     except Exception as e:
         print(e)
@@ -242,7 +246,7 @@ def addDisk(disk: Disk) -> ReturnValue:
             .format(id=sql.Literal(disk.getDiskID()), company=sql.Literal(disk.getCompany()),
                     speed=sql.Literal(disk.getSpeed()), space=sql.Literal(disk.getFreeSpace()),
                     cost=sql.Literal(disk.getCost()))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         conn.commit()
         return ReturnValue.OK
     except DatabaseException.ConnectionInvalid as e:
@@ -273,7 +277,7 @@ def getDiskProfile(diskID: int) -> Disk:
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT * FROM Disk WHERE id={diskID}".format(diskID=diskID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         answer = diskFromResultSet(result)
         conn.commit()
         return answer
@@ -289,7 +293,7 @@ def deleteDisk(diskID: int) -> ReturnValue:
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("DELETE FROM Disk WHERE id={diskID}".format(diskID=diskID))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         conn.commit()
         if rows_effected == 0:
             return ReturnValue.NOT_EXISTS
@@ -309,10 +313,10 @@ def addRAM(ram: RAM) -> ReturnValue:
     conn = None
     try:
         conn = Connector.DBConnector()
-        query = sql.SQL("INSERT INTO RAM(id, size, company) VALUES({id}, {size}, {company})") \
+        query = sql.SQL("INSERT INTO RAM(id, company, size) VALUES({id}, {company}, {size})") \
             .format(id=sql.Literal(ram.getRamID()), company=sql.Literal(ram.getCompany()),
                     size=sql.Literal(ram.getSize()))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         conn.commit()
         return ReturnValue.OK
     except DatabaseException.ConnectionInvalid as e:
@@ -343,7 +347,7 @@ def getRAMProfile(ramID: int) -> RAM:
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT * FROM RAM WHERE id={ramID}".format(ramID=ramID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         answer = ramFromResultSet(result)
         conn.commit()
         return answer
@@ -359,7 +363,7 @@ def deleteRAM(ramID: int) -> ReturnValue:
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("DELETE FROM RAM WHERE id={ramID}".format(ramID=ramID))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         conn.commit()
         if rows_effected == 0:
             return ReturnValue.NOT_EXISTS
@@ -387,7 +391,7 @@ def addDiskAndQuery(disk: Disk, query: Query) -> ReturnValue:
                     speed=sql.Literal(disk.getSpeed()), space=sql.Literal(disk.getFreeSpace()),
                     cost=sql.Literal(disk.getCost()), id_query=sql.Literal(query.getQueryID()), purpose=sql.Literal(query.getPurpose()),
                     size=sql.Literal(query.getSize()))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         return ReturnValue.OK
     except DatabaseException.ConnectionInvalid as e:
         print(e)
@@ -430,7 +434,7 @@ def addQueryToDisk(query: Query, diskID: int) -> ReturnValue:
                         "VALUES({query_id}, {disk_id});"
                         "COMMIT;"
                         .format(query_size=query.getSize(), query_id=query.getQueryID(), disk_id=diskID))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         return ReturnValue.OK
     except DatabaseException.ConnectionInvalid as e:
         print(e)
@@ -472,7 +476,7 @@ def removeQueryFromDisk(query: Query, diskID: int) -> ReturnValue:
                         "WHERE query_id = {query_id} AND disk_id = {disk_id};"
                         "COMMIT;"
                         .format(query_size=query.getSize(), query_id=query.getQueryID(), disk_id=diskID))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         return ReturnValue.OK
     except Exception as e:
         print(e)
@@ -489,7 +493,7 @@ def addRAMToDisk(ramID: int, diskID: int) -> ReturnValue:
         query = sql.SQL("INSERT INTO RamsOnDisk "
                         "VALUES({ram_id}, {disk_id});"
                         .format(ram_id=ramID, disk_id=diskID))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         conn.commit()
         return ReturnValue.OK
     except DatabaseException.ConnectionInvalid as e:
@@ -512,10 +516,10 @@ def removeRAMFromDisk(ramID: int, diskID: int) -> ReturnValue:
     conn = None
     try:
         conn = Connector.DBConnector()
-        query = sql.SQL("DELETE FROM RunningQueries "
+        query = sql.SQL("DELETE FROM RamsOnDisk "
                         "WHERE ram_id = {ram_id} AND disk_id = {disk_id};"
                         .format(ram_id=ramID, disk_id=diskID))
-        rows_effected, _ = conn.execute(query, printSchema=True)
+        rows_effected, _ = conn.execute(query, printSchema=False)
         conn.commit()
         if rows_effected == 0:
             return ReturnValue.NOT_EXISTS
@@ -536,7 +540,7 @@ def averageSizeQueriesOnDisk(diskID: int) -> float:
                                                "FROM RunningQueries "
                                                "WHERE disk_id = {disk_id}) AS Q "
                                                "ON id = query_id".format(disk_id=diskID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
         avg = list(result.__getitem__(0).values())[0]
         if avg is None:
@@ -558,7 +562,7 @@ def diskTotalRAM(diskID: int) -> int:
                         "FROM RamsOnDisk "
                         "WHERE disk_id = {disk_id}) AS Q "
                         "ON id = ram_id".format(disk_id=diskID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
         ram_sum = list(result.__getitem__(0).values())[0]
         if ram_sum is None:
@@ -581,7 +585,7 @@ def getCostForPurpose(purpose: str) -> int:
                         "FROM Query "
                         "WHERE purpose = '{q_purpose}') AS Q ON queries_id = query_id ) INNER JOIN Disk "
                         "ON id = disk_id".format(q_purpose=purpose))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
         cost_sum = list(result.__getitem__(0).values())[0]
         if cost_sum is None:
@@ -596,26 +600,32 @@ def getCostForPurpose(purpose: str) -> int:
 
 def getQueriesCanBeAddedToDisk(diskID: int) -> List[int]:
     conn = None
+    queries_id = []
     try:
         conn = Connector.DBConnector()
+        # query = sql.SQL("SELECT Q.id "
+        #                 "FROM (SELECT * FROM DISK_QUERY) "
+        #                 "WHERE D.id = {disk_id} AND ( D.space - Q.size >= 0 ) "
+        #                 "ORDER BY Q.id DESC "
+        #                 "LIMIT 5".format(disk_id=diskID))
         query = sql.SQL("SELECT Q.id "
-                        "FROM (SELECT * FROM DISK_QUERY) "
+                        "FROM Query AS Q, Disk AS D "
                         "WHERE D.id = {disk_id} AND ( D.space - Q.size >= 0 ) "
                         "ORDER BY Q.id DESC "
                         "LIMIT 5".format(disk_id=diskID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
-        list(result.__getitem__(0).values())
-        queries_id = []
         for i in range(rows_effected):
             queries_id += result.__getitem__(i).values()
         return queries_id
     finally:
         conn.close()
+        return queries_id
 
 
 def getQueriesCanBeAddedToDiskAndRAM(diskID: int) -> List[int]:
     conn = None
+    queries_id = []
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT DISTINCT Q.id "
@@ -624,21 +634,23 @@ def getQueriesCanBeAddedToDiskAndRAM(diskID: int) -> List[int]:
                         "( (SELECT SUM(size) AS sum FROM RAM INNER JOIN (SELECT ram_id FROM RamsOnDisk WHERE disk_id = {disk_id}) AS Q ON id = ram_id) - Q.size >=0 ) "
                         "ORDER BY Q.id ASC "
                         "LIMIT 5".format(disk_id=diskID))
-        # query = sql.SQL("SELECT DISTINCT A.query_id "
+        # query = sql.SQL("BEGIN;"
+        #                 "REFRESH MATERIALIZED VIEW DISK_QUERY_RAM;"
+        #                 "SELECT DISTINCT A.query_id "
         #                 "FROM (SELECT * FROM DISK_QUERY_RAM) AS A "
         #                 "WHERE A.disk_id = {disk_id} AND ( A.space - A.query_size >= 0 ) AND "
-        #                 "( (SELECT SUM(size) AS sum FROM RAM INNER JOIN (SELECT ram_id FROM RamsOnDisk WHERE disk_id = {disk_id}) AS Q ON id = ram_id) - A.query_size >=0 ) "
+        #                 "( (SELECT SUM(size) AS sum FROM RAM INNER JOIN (SELECT ram_id FROM RamsOnDisk WHERE disk_id = {disk_id}) AS Q ON id = ram_id) - A.query_size >= 0 ) "
         #                 "ORDER BY A.query_id ASC "
-        #                 "LIMIT 5".format(disk_id=diskID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        #                 "LIMIT 5;"
+        #                 "COMMIT;".format(disk_id=diskID))
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
-        queries_id = []
         for i in range(rows_effected):
             queries_id += result.__getitem__(i).values()
         return queries_id
     finally:
         conn.close()
-
+        return queries_id
 
 def isCompanyExclusive(diskID: int) -> bool:
     conn = None
@@ -656,7 +668,7 @@ def isCompanyExclusive(diskID: int) -> bool:
                         "(SELECT ram_id "
                         "FROM RamsOnDisk "
                         "WHERE disk_id = {disk_id}))) AS C".format(disk_id=diskID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
         companies_num = list(result.__getitem__(0).values())[0]
         if companies_num == 0:
@@ -674,6 +686,7 @@ def isCompanyExclusive(diskID: int) -> bool:
 
 def getConflictingDisks() -> List[int]:
     conn = None
+    queries_id = []
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT DISTINCT disk_id "
@@ -684,18 +697,19 @@ def getConflictingDisks() -> List[int]:
                         "GROUP BY query_id "
                         "HAVING COUNT(disk_id) > 1) "
                         "ORDER BY disk_id ASC")
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
-        queries_id = []
         for i in range(rows_effected):
             queries_id += result.__getitem__(i).values()
         return queries_id
     finally:
         conn.close()
+        return queries_id
 
 
 def mostAvailableDisks() -> List[int]:
     conn = None
+    queries_id = []
     try:
         conn = Connector.DBConnector()
         query = sql.SQL("SELECT R.id "
@@ -706,24 +720,26 @@ def mostAvailableDisks() -> List[int]:
                         "FROM Disk) AS B "
                         "LEFT OUTER JOIN "
                         "(SELECT D.id AS disk_id, Q.id AS query_id, D.speed AS speed "
-                        "FROM (SELECT * FROM DISK_QUERY) "
+                        "FROM Disk AS D, Query AS Q "
                         "WHERE D.space - Q.size >= 0 ) AS A ON A.disk_id = B.id"
                         ") AS DQ "
                         "GROUP BY DQ.id , DQ.disk_id, DQ.speed "
-                        "ORDER BY count DESC, DQ.speed DESC, DQ.disk_id ASC "
-                        ") AS R")
-        rows_effected, result = conn.execute(query, printSchema=True)
+                        # "ORDER BY count DESC, DQ.speed DESC, DQ.disk_id ASC "
+                        ") AS R "
+                        "ORDER BY R.count DESC, R.speed DESC, R.disk_id ASC ")
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
-        queries_id = []
         for i in range(rows_effected):
             queries_id += result.__getitem__(i).values()
         return queries_id
     finally:
         conn.close()
+        return queries_id
 
 
 def getCloseQueries(queryID: int) -> List[int]:
     conn = None
+    queries_id = []
     try:
         conn = Connector.DBConnector()
         query = sql.SQL(
@@ -750,11 +766,11 @@ def getCloseQueries(queryID: int) -> List[int]:
             "ORDER BY query_id ASC "
             "LIMIT 10"
             .format(query_id=queryID))
-        rows_effected, result = conn.execute(query, printSchema=True)
+        rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
-        queries_id = []
         for i in range(rows_effected):
             queries_id += result.__getitem__(i).values()
         return queries_id
     finally:
         conn.close()
+        return queries_id
