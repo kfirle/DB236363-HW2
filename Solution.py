@@ -714,30 +714,30 @@ def getCloseQueries(queryID: int) -> List[int]:
     queries_id = []
     try:
         conn = Connector.DBConnector()
-        query = sql.SQL(
-            "SELECT QUERIES_RUNNING_ON_QUERY_DISKS.query_id AS query_id "
-            "FROM "
-            "( "
-            "SELECT * "
-            "FROM RunningQueries "
-            "WHERE disk_id NOT IN "
-            "( "
-            "SELECT disk_id "
-            "FROM RunningQueries "
-            "WHERE disk_id NOT IN "
-            "( "
-            "SELECT disk_id AS disks "
-            "FROM RunningQueries "
-            "WHERE query_id = {query_id}"
-            ") AND EXISTS (SELECT disk_id AS disks FROM RunningQueries WHERE query_id = {query_id})"
-            ") "
-            ") AS QUERIES_RUNNING_ON_QUERY_DISKS "
-            "WHERE query_id != {query_id} "
-            "GROUP BY query_id "
-            "HAVING COUNT(QUERIES_RUNNING_ON_QUERY_DISKS.disk_id) * 2 >= ( SELECT (COUNT(disk_id)) FROM RunningQueries WHERE query_id = {query_id}) "
-            "ORDER BY query_id ASC "
-            "LIMIT 10"
-            .format(query_id=queryID))
+        #query = sql.SQL(
+            #"SELECT QUERIES_RUNNING_ON_QUERY_DISKS.query_id AS query_id "
+            #"FROM "
+            #"( "
+            #"SELECT * "
+            #"FROM RunningQueries "
+            #"WHERE disk_id NOT IN "
+            #"( "
+            #"SELECT disk_id "
+            #"FROM RunningQueries "
+            #"WHERE disk_id NOT IN "
+            #"( "
+            #"SELECT disk_id AS disks "
+            #"FROM RunningQueries "
+            #"WHERE query_id = {query_id}"
+            #") AND EXISTS (SELECT disk_id AS disks FROM RunningQueries WHERE query_id = {query_id})"
+            #") "
+            #") AS QUERIES_RUNNING_ON_QUERY_DISKS "
+            #"WHERE query_id != {query_id} "
+            #"GROUP BY query_id "
+            #"HAVING COUNT(QUERIES_RUNNING_ON_QUERY_DISKS.disk_id) * 2 >= ( SELECT (COUNT(disk_id)) FROM RunningQueries WHERE query_id = {query_id}) "
+            #"ORDER BY query_id ASC "
+            #"LIMIT 10"
+            #.format(query_id=queryID))
 
         # query = sql.SQL( "SELECT * FROM("
         # "(SELECT query_id FROM"
@@ -757,6 +757,7 @@ def getCloseQueries(queryID: int) -> List[int]:
         # "ORDER BY C.query_id ASC "
         # "LIMIT 10".format(query_id=queryID))
 
+        query = sql.SQL("SELECT * FROM (SELECT * FROM ((SELECT * FROM (SELECT query_id as q_id FROM (SELECT * FROM RunningQueries WHERE query_id != {query_id} AND disk_id IN(SELECT disk_id FROM RunningQueries WHERE query_id = {query_id})) AS A GROUP BY query_id HAVING COUNT(disk_id) * 2 >= (SELECT (COUNT(disk_id)) FROM RunningQueries WHERE query_id = {query_id})) AS B) UNION (SELECT * FROM (SELECT id as q_id FROM Query WHERE id != {query_id} AND NOT EXISTS(SELECT disk_id FROM RunningQueries WHERE query_id = {query_id})) AS C)) AS D) as E ORDER BY q_id ASC LIMIT 10".format(query_id=queryID))
         rows_effected, result = conn.execute(query, printSchema=False)
         conn.commit()
         for i in range(rows_effected):
